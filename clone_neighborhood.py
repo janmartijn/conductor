@@ -70,8 +70,7 @@ def clone_on_hub(session):
                 for nbh in nbhs:
                     all_nbh[nbh['name']] = (node_name, dev_name, net_name)
     print("Available neighborhoods to clone:")
-    for i, name in enumerate(all_nbh, 1):
-        print(f"{i}. {name}")
+    for i, name in enumerate(all_nbh, 1): print(f"{i}. {name}")
     choice = int(input("Select number: ")) - 1
     src_nbh = list(all_nbh)[choice]
     dest_nbh = input("Enter the new neighborhood name: ").strip()
@@ -121,35 +120,24 @@ def generate_router_list(session):
             router_nbh_map[rname] = nbh_set
     sorted_nbh = sorted(all_nbh)
     print("Beschikbare reference neighborhoods:")
-    for i, name in enumerate(sorted_nbh, 1):
-        print(f"{i}. {name}")
+    for i, name in enumerate(sorted_nbh, 1): print(f"{i}. {name}")
     ref_choice = int(input("Selecteer referentie-neighborhood (nummer): ")) - 1
     ref_nbh = sorted_nbh[ref_choice]
     target_routers = [r for r, nbhs in router_nbh_map.items() if ref_nbh in nbhs]
     print(f"Routers met neighborhood '{ref_nbh}': {len(target_routers)}")
-    for r in target_routers:
-        print(f"- {r}")
+    for r in target_routers: print(f"- {r}")
     filename = input("Enter filename to save router list [router_list.txt]: ").strip() or 'router_list.txt'
     with open(filename, 'w') as f:
-        for r in target_routers:
-            f.write(r + '\n')
+        for r in target_routers: f.write(r + '\n')
     print(f"Router list saved to {filename}. Je kunt dit bestand nu bewerken.")
 
-# Use-case 3: Add neighborhood to spokes via bewerkte router-list met error handling
+# Use-case 3: Add neighborhood via router-list, maar keuze uit ALLE neighborhoods
 def add_via_router_list(session):
-    filename = input("Enter router list filename [router_list.txt]: ").strip() or 'router_list.txt'
-    try:
-        with open(filename) as f:
-            routers = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"Fout bij lezen van {filename}: {e}")
-        return
-    if not routers:
-        print("Geen routers gevonden in lijst.")
-        return
-    print(f"Loaded {len(routers)} routers from {filename}.")
-    all_nbh = set()
-    for rname in routers:
+    # Bepaal alle beschikbare neighborhoods in het systeem
+    routers_all = api_get("/api/v1/config/candidate/authority/router", session)
+    global_nbh = set()
+    for r in routers_all:
+        rname = r['name']
         nodes = api_get(f"/api/v1/config/candidate/authority/router/{rname}/node", session)
         for node in nodes:
             node_name = node['name']
@@ -158,29 +146,40 @@ def add_via_router_list(session):
                 session
             )
             for dev in devs:
-                dev_name = dev['name']
                 nets = api_get(
-                    f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev_name}/network-interface",
+                    f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev['name']}/network-interface",
                     session
                 )
                 for net in nets:
                     nbhs = api_get(
-                        f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev_name}/network-interface/{net['name']}/neighborhood",
+                        f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev['name']}/network-interface/{net['name']}/neighborhood",
                         session
                     )
                     for nbh in nbhs:
-                        all_nbh.add(nbh['name'])
-    sorted_nbh = sorted(all_nbh)
-    print("Beschikbare neighborhoods om toe te voegen:")
-    for i, name in enumerate(sorted_nbh, 1):
-        print(f"{i}. {name}")
+                        global_nbh.add(nbh['name'])
+    sorted_global = sorted(global_nbh)
+    print("Alle beschikbare neighborhoods:")
+    for i, name in enumerate(sorted_global, 1): print(f"{i}. {name}")
+    # Lees router-list
+    filename = input("Enter router list filename [router_list.txt]: ").strip() or 'router_list.txt'
+    try:
+        with open(filename) as f:
+            target_routers = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        print(f"Fout bij lezen van {filename}: {e}")
+        return
+    if not target_routers:
+        print("Geen routers gevonden in lijst.")
+        return
+    print(f"Loaded {len(target_routers)} routers from {filename}.")
+    # Kies welke neighborhood toevoegen
     choice = int(input("Selecteer neighborhood om toe te voegen (nummer): ")) - 1
-    new_nbh = sorted_nbh[choice]
+    new_nbh = sorted_global[choice]
     if input(f"Add '{new_nbh}' to these routers on their WAN interfaces? (yes/no): ").strip().lower() != 'yes':
         print("Aborted.")
         return
-    # Iterate en handle errors
-    for rname in routers:
+    # Voeg toe met error handling
+    for rname in target_routers:
         nodes = api_get(f"/api/v1/config/candidate/authority/router/{rname}/node", session)
         for node in nodes:
             node_name = node['name']
@@ -189,27 +188,26 @@ def add_via_router_list(session):
                 session
             )
             for dev in devs:
-                dev_name = dev['name']
                 nets = api_get(
-                    f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev_name}/network-interface",
+                    f"/api/v1/config/candidate/authority/router/{rname}/node/{node_name}/device-interface/{dev['name']}/network-interface",
                     session
                 )
                 for net in nets:
                     if 'wan' in net['name'].lower():
                         path = (
                             f"/api/v1/config/candidate/authority/router/{rname}"
-                            f"/node/{node_name}/device-interface/{dev_name}"
+                            f"/node/{node_name}/device-interface/{dev['name']}"
                             f"/network-interface/{net['name']}/neighborhood"
                         )
                         try:
                             existing = [n['name'] for n in api_get(path, session)]
                             if new_nbh in existing:
-                                print(f"{new_nbh} already exists on {rname}/{node_name}/{dev_name}/{net['name']}, skipping.")
+                                print(f"{new_nbh} already exists on {rname}/{node_name}/{dev['name']}/{net['name']}, skipping.")
                                 continue
                             api_post(path, session, {"name": new_nbh})
-                            print(f"Added {new_nbh} to {rname}/{node_name}/{dev_name}/{net['name']}")
+                            print(f"Added {new_nbh} to {rname}/{node_name}/{dev['name']}/{net['name']}")
                         except requests.exceptions.HTTPError as e:
-                            print(f"Error adding to {rname}/{node_name}/{dev_name}/{net['name']}: {e}")
+                            print(f"Error adding to {rname}/{node_name}/{dev['name']}/{net['name']}: {e}")
     print("Done.")
 
 if __name__ == '__main__':
