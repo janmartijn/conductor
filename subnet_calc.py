@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-subnet_plan_generator.py: Generates a CSV subnet plan with Name, VLAN and Subnet columns
-based on a given supernet and fixed schema.
+subnet_plan_generator.py: Generates a subnet plan with aligned console output and optional CSV file export.
 
 Usage:
-    python subnet_plan_generator.py --supernet 10.186.48.0/20 > subnets.csv
+    python subnet_plan_generator.py --supernet 10.186.48.0/20 [--csv]
 
-Example output (CSV):
-    Name,VLAN,Subnet
-    workstation-wired,400,10.186.48.0/23
-    Reserved,xxx,10.186.50.0/23
-    ...
+By default, prints an aligned table to the screen. If --csv is provided,
+writes a CSV file named <supernet>_lld.csv (slashes replaced by underscores).
 """
 import ipaddress
 import argparse
 import csv
 import sys
+import os
 
 # Hardcoded schema entries: (Name, VLAN, relative offset/prefix)
 SCHEMA = [
@@ -36,11 +33,8 @@ SCHEMA = [
     ('net_mgmt', '900', 'x+15.0/24'),
 ]
 
+
 def parse_schema_entry(entry: str):
-    """
-    Parses a schema entry of the form 'x+<major>.<minor>/<prefix_len>'.
-    Returns a tuple (offset_bytes, prefix_len).
-    """
     if not entry.startswith('x+'):
         raise ValueError(f"Schema entry must start with 'x+': {entry}")
     offset_part, prefix_part = entry[2:].split('/')
@@ -52,9 +46,6 @@ def parse_schema_entry(entry: str):
 
 
 def compute_records(supernet: str):
-    """
-    Computes a list of records with Name, VLAN, and Subnet for CSV output.
-    """
     base_net = ipaddress.IPv4Network(supernet)
     records = []
     for name, vlan, entry in SCHEMA:
@@ -69,13 +60,42 @@ def compute_records(supernet: str):
     return records
 
 
+def print_table(records, headers):
+    # determine column widths
+    widths = {h: len(h) for h in headers}
+    for rec in records:
+        for h in headers:
+            widths[h] = max(widths[h], len(str(rec[h])))
+    # header line
+    header_line = '  '.join(h.ljust(widths[h]) for h in headers)
+    print(header_line)
+    # underline
+    print('  '.join('-' * widths[h] for h in headers))
+    # rows
+    for rec in records:
+        line = '  '.join(str(rec[h]).ljust(widths[h]) for h in headers)
+        print(line)
+
+
+def write_csv(records, headers, filename):
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=headers)
+        writer.writeheader()
+        for rec in records:
+            writer.writerow(rec)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate a CSV with Name, VLAN, and Subnet from a supernet."
+        description="Generate a VLAN subnet plan with optional CSV export."
     )
     parser.add_argument(
         '--supernet', '-s', required=True,
         help="Supernet in CIDR notation, e.g. 10.186.48.0/20"
+    )
+    parser.add_argument(
+        '--csv', '-c', action='store_true',
+        help="Also write CSV to <supernet>_lld.csv (slashes replaced by underscores)"
     )
     args = parser.parse_args()
 
@@ -85,11 +105,15 @@ def main():
         print(f"Error: {err}", file=sys.stderr)
         sys.exit(1)
 
-    fieldnames = ['Name', 'VLAN', 'Subnet']
-    writer = csv.DictWriter(sys.stdout, fieldnames=fieldnames)
-    writer.writeheader()
-    for rec in records:
-        writer.writerow(rec)
+    headers = ['Name', 'VLAN', 'Subnet']
+    # print aligned table
+    print_table(records, headers)
+
+    if args.csv:
+        safe_name = args.supernet.replace('/', '_')
+        filename = f"{safe_name}_lld.csv"
+        write_csv(records, headers, filename)
+        print(f"CSV written to {filename}")
 
 if __name__ == '__main__':
     main()
